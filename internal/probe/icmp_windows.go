@@ -114,12 +114,14 @@ func (p *ICMPProber) Probe(
 
 	destination := ipv4ToUint32(ip)
 
-	// Payload нужен нам для идентификации probe.
 	payload := make([]byte, 16)
 
 	binary.BigEndian.PutUint16(payload[0:2], p.ID)
 	binary.BigEndian.PutUint16(payload[2:4], uint16(ttl))
-	binary.BigEndian.PutUint64(payload[4:12], uint64(time.Now().UnixNano()))
+	binary.BigEndian.PutUint64(
+		payload[4:12],
+		uint64(time.Now().UnixNano()),
+	)
 
 	options := ipOptionInformation{
 		TTL: byte(ttl),
@@ -128,6 +130,7 @@ func (p *ICMPProber) Probe(
 	replyBuffer := make([]byte, 2048)
 
 	timeoutMS := uint32(p.Timeout / time.Millisecond)
+
 	if timeoutMS < 1 {
 		timeoutMS = 1
 	}
@@ -157,15 +160,17 @@ func (p *ICMPProber) Probe(
 	)
 
 	result.Addr = uint32ToIP(reply.Address)
-	result.RTT = time.Duration(reply.RoundTripTime) * time.Millisecond
+
+	result.RTT =
+		time.Duration(reply.RoundTripTime) *
+			time.Millisecond
 
 	switch reply.Status {
+
 	case ipSuccess:
 		result.Reached = true
 
 	case ipTTLExpiredTransit:
-		// Пакет дошёл до промежуточного маршрутизатора,
-		// TTL стал 0, и маршрутизатор вернул Time Exceeded.
 		result.Reached = false
 
 	case ipReqTimedOut:
@@ -192,15 +197,23 @@ func resolveIPv4(target string) (net.IP, error) {
 		ip = ip.To4()
 
 		if ip == nil {
-			return nil, fmt.Errorf("target %q is not IPv4", target)
+			return nil, fmt.Errorf(
+				"target %q is not IPv4",
+				target,
+			)
 		}
 
 		return ip, nil
 	}
 
 	ips, err := net.LookupIP(target)
+
 	if err != nil {
-		return nil, fmt.Errorf("resolve %q: %w", target, err)
+		return nil, fmt.Errorf(
+			"resolve %q: %w",
+			target,
+			err,
+		)
 	}
 
 	for _, candidate := range ips {
@@ -209,7 +222,10 @@ func resolveIPv4(target string) (net.IP, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no IPv4 address found for %q", target)
+	return nil, fmt.Errorf(
+		"no IPv4 address found for %q",
+		target,
+	)
 }
 
 func ipv4ToUint32(ip net.IP) uint32 {
