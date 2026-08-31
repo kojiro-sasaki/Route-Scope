@@ -7,6 +7,8 @@ import (
 )
 
 type Result struct {
+	TTL int
+
 	Addr    net.IP
 	RTT     time.Duration
 	Reached bool
