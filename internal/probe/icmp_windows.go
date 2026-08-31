@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	ipSuccess             = 0
-	ipReqTimedOut         = 11010
-	ipTTLExpiredTransit   = 11013
-	ipDestNetUnreachable  = 11002
-	ipDestHostUnreachable = 11003
-	ipDestProtUnreachable = 11004
+	ipSuccess              = 0
+	ipReqTimedOut          = 11010
+	ipTTLExpiredTransit    = 11013
+	ipDestNetUnreachable   = 11002
+	ipDestHostUnreachable  = 11003
+	ipDestProtUnreachable  = 11004
 	ipDestPortUnreachable = 11005
 )
 
@@ -52,41 +52,20 @@ var (
 type ICMPProber struct {
 	Timeout time.Duration
 	ID      uint16
-
-	handle windows.Handle
 }
 
 func NewICMPProber(timeout time.Duration) (*ICMPProber, error) {
-	r1, _, err := procIcmpCreateFile.Call()
-
-	handle := windows.Handle(r1)
-
-	if handle == windows.InvalidHandle {
-		return nil, fmt.Errorf("IcmpCreateFile: %w", err)
+	if timeout <= 0 {
+		return nil, fmt.Errorf("timeout must be greater than zero")
 	}
 
 	return &ICMPProber{
 		Timeout: timeout,
 		ID:      uint16(time.Now().UnixNano()),
-		handle:  handle,
 	}, nil
 }
 
 func (p *ICMPProber) Close() error {
-	if p.handle == 0 || p.handle == windows.InvalidHandle {
-		return nil
-	}
-
-	r1, _, err := procIcmpCloseHandle.Call(
-		uintptr(p.handle),
-	)
-
-	if r1 == 0 {
-		return fmt.Errorf("IcmpCloseHandle: %w", err)
-	}
-
-	p.handle = 0
-
 	return nil
 }
 
@@ -97,13 +76,19 @@ func (p *ICMPProber) Probe(
 ) (Result, error) {
 	var result Result
 
+	result.TTL = ttl
+
 	if ttl < 1 || ttl > 255 {
-		return result, fmt.Errorf("invalid TTL: %d", ttl)
+		return result, fmt.Errorf(
+			"invalid TTL: %d",
+			ttl,
+		)
 	}
 
 	select {
 	case <-ctx.Done():
 		return result, ctx.Err()
+
 	default:
 	}
 
@@ -114,10 +99,35 @@ func (p *ICMPProber) Probe(
 
 	destination := ipv4ToUint32(ip)
 
+	r1, _, err := procIcmpCreateFile.Call()
+
+	handle := windows.Handle(r1)
+
+	if handle == windows.InvalidHandle {
+		return result, fmt.Errorf(
+			"IcmpCreateFile: %w",
+			err,
+		)
+	}
+
+	defer func() {
+		procIcmpCloseHandle.Call(
+			uintptr(handle),
+		)
+	}()
+
 	payload := make([]byte, 16)
 
-	binary.BigEndian.PutUint16(payload[0:2], p.ID)
-	binary.BigEndian.PutUint16(payload[2:4], uint16(ttl))
+	binary.BigEndian.PutUint16(
+		payload[0:2],
+		p.ID,
+	)
+
+	binary.BigEndian.PutUint16(
+		payload[2:4],
+		uint16(ttl),
+	)
+
 	binary.BigEndian.PutUint64(
 		payload[4:12],
 		uint64(time.Now().UnixNano()),
@@ -129,14 +139,16 @@ func (p *ICMPProber) Probe(
 
 	replyBuffer := make([]byte, 2048)
 
-	timeoutMS := uint32(p.Timeout / time.Millisecond)
+	timeoutMS := uint32(
+		p.Timeout / time.Millisecond,
+	)
 
 	if timeoutMS < 1 {
 		timeoutMS = 1
 	}
 
 	ret, _, _ := procIcmpSendEcho.Call(
-		uintptr(p.handle),
+		uintptr(handle),
 		uintptr(destination),
 
 		uintptr(unsafe.Pointer(&payload[0])),
