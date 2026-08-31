@@ -3,6 +3,8 @@ package trace
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/kojiro-sasaki/Route-Scope.git/internal/probe"
@@ -14,6 +16,7 @@ type Engine struct {
 	MaxTTL   int
 	Interval time.Duration
 
+	mu   sync.RWMutex
 	hops map[int]*Hop
 }
 
@@ -23,8 +26,8 @@ func NewEngine(
 	interval time.Duration,
 ) *Engine {
 	return &Engine{
-		Prober:  prober,
-		MaxTTL:  maxTTL,
+		Prober:   prober,
+		MaxTTL:   maxTTL,
 		Interval: interval,
 
 		hops: make(map[int]*Hop),
@@ -82,30 +85,95 @@ func (e *Engine) probeRound(
 	ctx context.Context,
 	target string,
 ) error {
+	type probeResult struct {
+		result probe.Result
+		err    error
+	}
+
+	results := make(chan probeResult, e.MaxTTL)
+
+	var wg sync.WaitGroup
+
+	wg.Add(e.MaxTTL)
+
 	for ttl := 1; ttl <= e.MaxTTL; ttl++ {
+		ttl := ttl
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		go func() {
+			defer wg.Done()
 
-		default:
-		}
-
-		result, err := e.Prober.Probe(
-			ctx,
-			target,
-			ttl,
-		)
-
-		if err != nil {
-			return fmt.Errorf(
-				"probe ttl=%d: %w",
+			result, err := e.Prober.Probe(
+				ctx,
+				target,
 				ttl,
-				err,
 			)
+
+			results <- probeResult{
+				result: result,
+				err:    err,
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var firstError error
+
+	roundResults := make(
+		[]probe.Result,
+		0,
+		e.MaxTTL,
+	)
+
+	for item := range results {
+		if item.err != nil {
+			if firstError == nil {
+				firstError = fmt.Errorf(
+					"probe ttl=%d: %w",
+					item.result.TTL,
+					item.err,
+				)
+			}
+
+			continue
 		}
 
-		hop := e.getHop(ttl)
+		roundResults = append(
+			roundResults,
+			item.result,
+		)
+	}
+
+	if firstError != nil {
+		return firstError
+	}
+
+	sort.Slice(
+		roundResults,
+		func(i, j int) bool {
+			return roundResults[i].TTL <
+				roundResults[j].TTL
+		},
+	)
+
+	lastTTL := e.MaxTTL
+
+	for _, result := range roundResults {
+		if result.Reached {
+			lastTTL = result.TTL
+			break
+		}
+	}
+
+	for _, result := range roundResults {
+		if result.TTL > lastTTL {
+			continue
+		}
+
+		hop := e.getHop(result.TTL)
 
 		if result.Timeout {
 			hop.Update(
@@ -113,23 +181,24 @@ func (e *Engine) probeRound(
 				0,
 				false,
 			)
-		} else {
-			hop.Update(
-				result.Addr,
-				result.RTT,
-				true,
-			)
+
+			continue
 		}
 
-		if result.Reached {
-			break
-		}
+		hop.Update(
+			result.Addr,
+			result.RTT,
+			true,
+		)
 	}
 
 	return nil
 }
 
 func (e *Engine) getHop(ttl int) *Hop {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	hop, exists := e.hops[ttl]
 
 	if !exists {
@@ -141,6 +210,9 @@ func (e *Engine) getHop(ttl int) *Hop {
 }
 
 func (e *Engine) Hops() []HopSnapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
 	result := make(
 		[]HopSnapshot,
 		0,
@@ -153,6 +225,14 @@ func (e *Engine) Hops() []HopSnapshot {
 			hop.Snapshot(),
 		)
 	}
+
+	sort.Slice(
+		result,
+		func(i, j int) bool {
+			return result[i].TTL <
+				result[j].TTL
+		},
+	)
 
 	return result
 }
