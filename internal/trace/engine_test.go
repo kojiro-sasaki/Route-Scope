@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -306,11 +307,11 @@ func TestEngineContextCancellation(
 
 	if err == nil {
 		t.Fatal(
-			"Run() error = nil, want error",
+			"Run() error = nil, want context cancellation",
 		)
 	}
 
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf(
 			"Run() error = %v, want context.Canceled",
 			err,
