@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	ipSuccess              = 0
-	ipReqTimedOut          = 11010
-	ipTTLExpiredTransit    = 11013
-	ipDestNetUnreachable   = 11002
-	ipDestHostUnreachable  = 11003
-	ipDestProtUnreachable  = 11004
+	ipSuccess             = 0
+	ipReqTimedOut         = 11010
+	ipTTLExpiredTransit   = 11013
+	ipDestNetUnreachable  = 11002
+	ipDestHostUnreachable = 11003
+	ipDestProtUnreachable = 11004
 	ipDestPortUnreachable = 11005
 )
 
