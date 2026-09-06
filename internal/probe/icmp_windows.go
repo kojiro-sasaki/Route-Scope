@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -52,20 +53,71 @@ var (
 type ICMPProber struct {
 	Timeout time.Duration
 	ID      uint16
+
+	mu     sync.RWMutex
+	handle windows.Handle
+	closed bool
 }
 
 func NewICMPProber(timeout time.Duration) (*ICMPProber, error) {
 	if timeout <= 0 {
-		return nil, fmt.Errorf("timeout must be greater than zero")
+		return nil, fmt.Errorf(
+			"timeout must be greater than zero",
+		)
+	}
+
+	r1, _, err := procIcmpCreateFile.Call()
+
+	handle := windows.Handle(r1)
+
+	if handle == windows.InvalidHandle {
+		if err != nil {
+			return nil, fmt.Errorf(
+				"IcmpCreateFile: %w",
+				err,
+			)
+		}
+
+		return nil, fmt.Errorf(
+			"IcmpCreateFile failed",
+		)
 	}
 
 	return &ICMPProber{
 		Timeout: timeout,
 		ID:      uint16(time.Now().UnixNano()),
+		handle:  handle,
 	}, nil
 }
 
 func (p *ICMPProber) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return nil
+	}
+
+	r1, _, err := procIcmpCloseHandle.Call(
+		uintptr(p.handle),
+	)
+
+	if r1 == 0 {
+		if err != nil {
+			return fmt.Errorf(
+				"IcmpCloseHandle: %w",
+				err,
+			)
+		}
+
+		return fmt.Errorf(
+			"IcmpCloseHandle failed",
+		)
+	}
+
+	p.closed = true
+	p.handle = windows.InvalidHandle
+
 	return nil
 }
 
@@ -97,24 +149,16 @@ func (p *ICMPProber) Probe(
 		return result, err
 	}
 
-	destination := ipv4ToUint32(ip)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
-	r1, _, err := procIcmpCreateFile.Call()
-
-	handle := windows.Handle(r1)
-
-	if handle == windows.InvalidHandle {
+	if p.closed {
 		return result, fmt.Errorf(
-			"IcmpCreateFile: %w",
-			err,
+			"ICMP prober is closed",
 		)
 	}
 
-	defer func() {
-		procIcmpCloseHandle.Call(
-			uintptr(handle),
-		)
-	}()
+	destination := ipv4ToUint32(ip)
 
 	payload := make([]byte, 16)
 
@@ -148,17 +192,13 @@ func (p *ICMPProber) Probe(
 	}
 
 	ret, _, _ := procIcmpSendEcho.Call(
-		uintptr(handle),
+		uintptr(p.handle),
 		uintptr(destination),
-
 		uintptr(unsafe.Pointer(&payload[0])),
 		uintptr(len(payload)),
-
 		uintptr(unsafe.Pointer(&options)),
-
 		uintptr(unsafe.Pointer(&replyBuffer[0])),
 		uintptr(len(replyBuffer)),
-
 		uintptr(timeoutMS),
 	)
 
@@ -171,14 +211,15 @@ func (p *ICMPProber) Probe(
 		unsafe.Pointer(&replyBuffer[0]),
 	)
 
-	result.Addr = uint32ToIP(reply.Address)
+	result.Addr = uint32ToIP(
+		reply.Address,
+	)
 
 	result.RTT =
 		time.Duration(reply.RoundTripTime) *
 			time.Millisecond
 
 	switch reply.Status {
-
 	case ipSuccess:
 		result.Reached = true
 
@@ -192,7 +233,6 @@ func (p *ICMPProber) Probe(
 		ipDestHostUnreachable,
 		ipDestProtUnreachable,
 		ipDestPortUnreachable:
-
 		result.Timeout = true
 
 	default:
