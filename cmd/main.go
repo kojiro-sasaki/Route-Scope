@@ -4,15 +4,88 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/kojiro-sasaki/Route-Scope.git/internal/probe"
 	"github.com/kojiro-sasaki/Route-Scope.git/internal/trace"
 )
+
+type dnsCache struct {
+	mu        sync.RWMutex
+	names     map[string]string
+	resolving map[string]bool
+}
+
+func newDNSCache() *dnsCache {
+	return &dnsCache{
+		names:     make(map[string]string),
+		resolving: make(map[string]bool),
+	}
+}
+
+func (c *dnsCache) get(ip string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	name, ok := c.names[ip]
+
+	return name, ok
+}
+
+func (c *dnsCache) resolve(ip string) {
+	c.mu.Lock()
+
+	if c.resolving[ip] {
+		c.mu.Unlock()
+		return
+	}
+
+	if _, ok := c.names[ip]; ok {
+		c.mu.Unlock()
+		return
+	}
+
+	c.resolving[ip] = true
+	c.mu.Unlock()
+
+	go func() {
+		names, err := net.LookupAddr(ip)
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		delete(c.resolving, ip)
+
+		if err != nil || len(names) == 0 {
+			c.names[ip] = ip
+			return
+		}
+
+		name := strings.TrimSuffix(
+			names[0],
+			".",
+		)
+
+		c.names[ip] = name
+	}()
+}
+
+func (c *dnsCache) host(ip string) string {
+	if name, ok := c.get(ip); ok {
+		return name
+	}
+
+	c.resolve(ip)
+
+	return ip
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -117,6 +190,8 @@ func main() {
 		*interval,
 	)
 
+	dns := newDNSCache()
+
 	go func() {
 		if err := engine.Run(
 			ctx,
@@ -140,6 +215,7 @@ func main() {
 	printHops(
 		engine,
 		target,
+		dns,
 	)
 
 	for {
@@ -153,6 +229,7 @@ func main() {
 			printHops(
 				engine,
 				target,
+				dns,
 			)
 		}
 	}
@@ -161,6 +238,7 @@ func main() {
 func printHops(
 	engine *trace.Engine,
 	target string,
+	dns *dnsCache,
 ) {
 	hops := engine.Hops()
 
@@ -181,7 +259,7 @@ func printHops(
 	)
 
 	fmt.Printf(
-		"%-4s %-18s %-8s %-6s %-9s %-9s %-9s %-9s\n",
+		"%-4s %-32s %-8s %-6s %-9s %-9s %-9s %-9s\n",
 		"Hop",
 		"Host",
 		"Loss",
@@ -198,7 +276,18 @@ func printHops(
 		host := "*"
 
 		if hop.Addr != nil {
-			host = hop.Addr.String()
+			ip := hop.Addr.String()
+			name := dns.host(ip)
+
+			if name == ip {
+				host = ip
+			} else {
+				host = fmt.Sprintf(
+					"%s (%s)",
+					name,
+					ip,
+				)
+			}
 		}
 
 		last := "-"
@@ -214,7 +303,7 @@ func printHops(
 		}
 
 		fmt.Printf(
-			"%-4d %-18s %6.1f%% %6d %-9s %-9s %-9s %-9s\n",
+			"%-4d %-32s %6.1f%% %6d %-9s %-9s %-9s %-9s\n",
 			hop.TTL,
 			host,
 			stats.Loss(),
