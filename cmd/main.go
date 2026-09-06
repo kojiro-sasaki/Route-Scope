@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -14,7 +15,72 @@ import (
 )
 
 func main() {
-	target := "8.8.8.8"
+	if len(os.Args) < 2 {
+		fmt.Fprintf(
+			os.Stderr,
+			"usage: %s <target> [options]\n",
+			os.Args[0],
+		)
+		os.Exit(2)
+	}
+
+	target := os.Args[1]
+
+	fs := flag.NewFlagSet(
+		os.Args[0],
+		flag.ExitOnError,
+	)
+
+	interval := fs.Duration(
+		"interval",
+		time.Second,
+		"",
+	)
+
+	timeout := fs.Duration(
+		"timeout",
+		2*time.Second,
+		"",
+	)
+
+	maxTTL := fs.Int(
+		"max-ttl",
+		30,
+		"",
+	)
+
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		fmt.Fprintf(
+			os.Stderr,
+			"parse options: %v\n",
+			err,
+		)
+		os.Exit(2)
+	}
+
+	if *interval <= 0 {
+		fmt.Fprintln(
+			os.Stderr,
+			"interval must be greater than zero",
+		)
+		os.Exit(2)
+	}
+
+	if *timeout <= 0 {
+		fmt.Fprintln(
+			os.Stderr,
+			"timeout must be greater than zero",
+		)
+		os.Exit(2)
+	}
+
+	if *maxTTL < 1 || *maxTTL > 255 {
+		fmt.Fprintln(
+			os.Stderr,
+			"max-ttl must be between 1 and 255",
+		)
+		os.Exit(2)
+	}
 
 	ctx, cancel := signal.NotifyContext(
 		context.Background(),
@@ -24,16 +90,22 @@ func main() {
 	defer cancel()
 
 	prober, err := probe.NewICMPProber(
-		2 * time.Second,
+		*timeout,
 	)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(
+			os.Stderr,
+			"create ICMP prober: %v\n",
+			err,
+		)
+		os.Exit(1)
 	}
 
 	defer func() {
 		if err := prober.Close(); err != nil {
-			fmt.Printf(
-				"close ICMP handle: %v\n",
+			fmt.Fprintf(
+				os.Stderr,
+				"close ICMP prober: %v\n",
 				err,
 			)
 		}
@@ -41,37 +113,40 @@ func main() {
 
 	engine := trace.NewEngine(
 		prober,
-		30,
-		1*time.Second,
+		*maxTTL,
+		*interval,
 	)
 
 	go func() {
-		err := engine.Run(
+		if err := engine.Run(
 			ctx,
 			target,
-		)
-
-		if err != nil &&
+		); err != nil &&
 			ctx.Err() == nil {
-
-			fmt.Printf(
-				"engine error: %v\n",
+			fmt.Fprintf(
+				os.Stderr,
+				"trace error: %v\n",
 				err,
 			)
-
 			cancel()
 		}
 	}()
 
 	ticker := time.NewTicker(
-		1 * time.Second,
+		*interval,
 	)
 	defer ticker.Stop()
+
+	printHops(
+		engine,
+		target,
+	)
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("\nStopping...")
+			fmt.Println()
+			fmt.Println("Stopping...")
 			return
 
 		case <-ticker.C:
@@ -96,11 +171,12 @@ func printHops(
 		},
 	)
 
-	// Очистка терминала.
-	fmt.Print("\033[H\033[2J")
+	fmt.Print(
+		"\033[H\033[2J",
+	)
 
 	fmt.Printf(
-		"Go Tool MTR → %s\n\n",
+		"Route-Scope → %s\n\n",
 		target,
 	)
 
