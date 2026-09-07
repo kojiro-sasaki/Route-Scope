@@ -29,8 +29,7 @@ func NewEngine(
 		Prober:   prober,
 		MaxTTL:   maxTTL,
 		Interval: interval,
-
-		hops: make(map[int]*Hop),
+		hops:     make(map[int]*Hop),
 	}
 }
 
@@ -39,7 +38,9 @@ func (e *Engine) Run(
 	target string,
 ) error {
 	if e.Prober == nil {
-		return fmt.Errorf("prober is nil")
+		return fmt.Errorf(
+			"prober is nil",
+		)
 	}
 
 	if e.MaxTTL < 1 || e.MaxTTL > 255 {
@@ -62,7 +63,9 @@ func (e *Engine) Run(
 		return err
 	}
 
-	ticker := time.NewTicker(e.Interval)
+	ticker := time.NewTicker(
+		e.Interval,
+	)
 	defer ticker.Stop()
 
 	for {
@@ -90,7 +93,10 @@ func (e *Engine) probeRound(
 		err    error
 	}
 
-	results := make(chan probeResult, e.MaxTTL)
+	results := make(
+		chan probeResult,
+		e.MaxTTL,
+	)
 
 	var wg sync.WaitGroup
 
@@ -162,7 +168,8 @@ func (e *Engine) probeRound(
 	lastTTL := e.MaxTTL
 
 	for _, result := range roundResults {
-		if result.Reached {
+		if result.Reached ||
+			result.Status == probe.StatusSuccess {
 			lastTTL = result.TTL
 			break
 		}
@@ -173,22 +180,14 @@ func (e *Engine) probeRound(
 			continue
 		}
 
-		hop := e.getHop(result.TTL)
-
-		if result.Timeout {
-			hop.Update(
-				nil,
-				0,
-				false,
-			)
-
-			continue
-		}
+		hop := e.getHop(
+			result.TTL,
+		)
 
 		hop.Update(
 			result.Addr,
 			result.RTT,
-			true,
+			result.Status,
 		)
 	}
 
@@ -202,7 +201,10 @@ func (e *Engine) getHop(ttl int) *Hop {
 	hop, exists := e.hops[ttl]
 
 	if !exists {
-		hop = NewHop(ttl)
+		hop = NewHop(
+			ttl,
+		)
+
 		e.hops[ttl] = hop
 	}
 

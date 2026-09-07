@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/kojiro-sasaki/Route-Scope.git/internal/probe"
 )
 
 type Hop struct {
@@ -11,9 +13,9 @@ type Hop struct {
 
 	mu sync.RWMutex
 
-	Addr net.IP
-
-	Stats Stats
+	Addr   net.IP
+	Status probe.Status
+	Stats  Stats
 }
 
 func NewHop(ttl int) *Hop {
@@ -25,10 +27,12 @@ func NewHop(ttl int) *Hop {
 func (h *Hop) Update(
 	addr net.IP,
 	rtt time.Duration,
-	received bool,
+	status probe.Status,
 ) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	h.Status = status
 
 	if addr != nil {
 		h.Addr = append(
@@ -37,9 +41,12 @@ func (h *Hop) Update(
 		)
 	}
 
-	if received {
+	switch status {
+	case probe.StatusSuccess,
+		probe.StatusTTLExpired:
 		h.Stats.Add(rtt)
-	} else {
+
+	default:
 		h.Stats.Timeout()
 	}
 }
@@ -58,14 +65,16 @@ func (h *Hop) Snapshot() HopSnapshot {
 	}
 
 	return HopSnapshot{
-		TTL:   h.TTL,
-		Addr:  addr,
-		Stats: h.Stats,
+		TTL:    h.TTL,
+		Addr:   addr,
+		Status: h.Status,
+		Stats:  h.Stats,
 	}
 }
 
 type HopSnapshot struct {
-	TTL   int
-	Addr  net.IP
-	Stats Stats
+	TTL    int
+	Addr   net.IP
+	Status probe.Status
+	Stats  Stats
 }

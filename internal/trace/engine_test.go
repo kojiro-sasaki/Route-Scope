@@ -53,6 +53,7 @@ func (p *fakeProber) Probe(
 		return probe.Result{
 			TTL:     ttl,
 			Timeout: true,
+			Status:  probe.StatusTimeout,
 		}, nil
 	}
 
@@ -88,20 +89,23 @@ func TestEngineProbeRound(t *testing.T) {
 				Addr: net.ParseIP(
 					"192.168.1.1",
 				),
-				RTT: 2 * time.Millisecond,
+				RTT:    2 * time.Millisecond,
+				Status: probe.StatusTTLExpired,
 			},
 			2: {
 				TTL: 2,
 				Addr: net.ParseIP(
 					"10.0.0.1",
 				),
-				RTT: 8 * time.Millisecond,
+				RTT:    8 * time.Millisecond,
+				Status: probe.StatusTTLExpired,
 			},
 			3: {
 				TTL:     3,
 				Addr:    target,
 				RTT:     15 * time.Millisecond,
 				Reached: true,
+				Status:  probe.StatusSuccess,
 			},
 		},
 	)
@@ -112,10 +116,8 @@ func TestEngineProbeRound(t *testing.T) {
 		time.Second,
 	)
 
-	ctx := context.Background()
-
 	err := engine.probeRound(
-		ctx,
+		context.Background(),
 		"8.8.8.8",
 	)
 
@@ -153,6 +155,30 @@ func TestEngineProbeRound(t *testing.T) {
 		t.Fatalf(
 			"hops[2].TTL = %d, want 3",
 			hops[2].TTL,
+		)
+	}
+
+	if hops[0].Status != probe.StatusTTLExpired {
+		t.Fatalf(
+			"hop 1 status = %d, want %d",
+			hops[0].Status,
+			probe.StatusTTLExpired,
+		)
+	}
+
+	if hops[1].Status != probe.StatusTTLExpired {
+		t.Fatalf(
+			"hop 2 status = %d, want %d",
+			hops[1].Status,
+			probe.StatusTTLExpired,
+		)
+	}
+
+	if hops[2].Status != probe.StatusSuccess {
+		t.Fatalf(
+			"hop 3 status = %d, want %d",
+			hops[2].Status,
+			probe.StatusSuccess,
 		)
 	}
 
@@ -202,7 +228,8 @@ func TestEngineStopsAfterTarget(
 				Addr: net.ParseIP(
 					"192.168.1.1",
 				),
-				RTT: 2 * time.Millisecond,
+				RTT:    2 * time.Millisecond,
+				Status: probe.StatusTTLExpired,
 			},
 			2: {
 				TTL: 2,
@@ -211,6 +238,13 @@ func TestEngineStopsAfterTarget(
 				),
 				RTT:     10 * time.Millisecond,
 				Reached: true,
+				Status:  probe.StatusSuccess,
+			},
+			3: {
+				TTL:     3,
+				Addr:    net.ParseIP("8.8.8.8"),
+				Reached: true,
+				Status:  probe.StatusSuccess,
 			},
 		},
 	)
@@ -256,6 +290,14 @@ func TestEngineStopsAfterTarget(
 		)
 	}
 
+	if hops[1].Status != probe.StatusSuccess {
+		t.Fatalf(
+			"target status = %d, want %d",
+			hops[1].Status,
+			probe.StatusSuccess,
+		)
+	}
+
 	if hops[1].Addr == nil {
 		t.Fatal(
 			"target address is nil",
@@ -277,6 +319,151 @@ func TestEngineStopsAfterTarget(
 		t.Fatalf(
 			"probe calls = %d, want 30",
 			len(calls),
+		)
+	}
+}
+
+func TestEngineTimeout(
+	t *testing.T,
+) {
+	prober := newFakeProber(
+		map[int]probe.Result{
+			1: {
+				TTL:     1,
+				Timeout: true,
+				Status:  probe.StatusTimeout,
+			},
+		},
+	)
+
+	engine := NewEngine(
+		prober,
+		1,
+		time.Second,
+	)
+
+	err := engine.probeRound(
+		context.Background(),
+		"8.8.8.8",
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"probeRound() error = %v",
+			err,
+		)
+	}
+
+	hops := engine.Hops()
+
+	if len(hops) != 1 {
+		t.Fatalf(
+			"len(hops) = %d, want 1",
+			len(hops),
+		)
+	}
+
+	if hops[0].Status != probe.StatusTimeout {
+		t.Fatalf(
+			"status = %d, want %d",
+			hops[0].Status,
+			probe.StatusTimeout,
+		)
+	}
+
+	if hops[0].Stats.Sent != 1 {
+		t.Fatalf(
+			"sent = %d, want 1",
+			hops[0].Stats.Sent,
+		)
+	}
+
+	if hops[0].Stats.Received != 0 {
+		t.Fatalf(
+			"received = %d, want 0",
+			hops[0].Stats.Received,
+		)
+	}
+
+	if hops[0].Stats.Loss() != 100 {
+		t.Fatalf(
+			"loss = %.1f, want 100",
+			hops[0].Stats.Loss(),
+		)
+	}
+}
+
+func TestEngineUnreachable(
+	t *testing.T,
+) {
+	prober := newFakeProber(
+		map[int]probe.Result{
+			1: {
+				TTL: 1,
+				Addr: net.ParseIP(
+					"192.168.1.1",
+				),
+				Timeout: true,
+				Status:  probe.StatusUnreachable,
+			},
+		},
+	)
+
+	engine := NewEngine(
+		prober,
+		1,
+		time.Second,
+	)
+
+	err := engine.probeRound(
+		context.Background(),
+		"8.8.8.8",
+	)
+
+	if err != nil {
+		t.Fatalf(
+			"probeRound() error = %v",
+			err,
+		)
+	}
+
+	hops := engine.Hops()
+
+	if len(hops) != 1 {
+		t.Fatalf(
+			"len(hops) = %d, want 1",
+			len(hops),
+		)
+	}
+
+	if hops[0].Status != probe.StatusUnreachable {
+		t.Fatalf(
+			"status = %d, want %d",
+			hops[0].Status,
+			probe.StatusUnreachable,
+		)
+	}
+
+	if !hops[0].Addr.Equal(
+		net.ParseIP("192.168.1.1"),
+	) {
+		t.Fatalf(
+			"addr = %s, want 192.168.1.1",
+			hops[0].Addr,
+		)
+	}
+
+	if hops[0].Stats.Sent != 1 {
+		t.Fatalf(
+			"sent = %d, want 1",
+			hops[0].Stats.Sent,
+		)
+	}
+
+	if hops[0].Stats.Received != 0 {
+		t.Fatalf(
+			"received = %d, want 0",
+			hops[0].Stats.Received,
 		)
 	}
 }
