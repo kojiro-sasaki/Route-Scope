@@ -87,6 +87,25 @@ func (c *dnsCache) host(ip string) string {
 	return ip
 }
 
+func statusText(status probe.Status) string {
+	switch status {
+	case probe.StatusSuccess:
+		return "SUCCESS"
+
+	case probe.StatusTTLExpired:
+		return "TTL_EXPIRED"
+
+	case probe.StatusTimeout:
+		return "TIMEOUT"
+
+	case probe.StatusUnreachable:
+		return "UNREACHABLE"
+
+	default:
+		return "UNKNOWN"
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(
@@ -259,9 +278,10 @@ func printHops(
 	)
 
 	fmt.Printf(
-		"%-4s %-32s %-8s %-6s %-9s %-9s %-9s %-9s\n",
+		"%-4s %-32s %-12s %-8s %-6s %-9s %-9s %-9s %-9s\n",
 		"Hop",
 		"Host",
+		"Status",
 		"Loss",
 		"Sent",
 		"Last",
@@ -303,9 +323,10 @@ func printHops(
 		}
 
 		fmt.Printf(
-			"%-4d %-32s %6.1f%% %6d %-9s %-9s %-9s %-9s\n",
+			"%-4d %-32s %-12s %6.1f%% %6d %-9s %-9s %-9s %-9s\n",
 			hop.TTL,
 			host,
+			statusText(hop.Status),
 			stats.Loss(),
 			stats.Sent,
 			last,
