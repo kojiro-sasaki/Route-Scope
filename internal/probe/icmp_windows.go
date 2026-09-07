@@ -129,6 +129,7 @@ func (p *ICMPProber) Probe(
 	var result Result
 
 	result.TTL = ttl
+	result.Status = StatusUnknown
 
 	if ttl < 1 || ttl > 255 {
 		return result, fmt.Errorf(
@@ -204,6 +205,8 @@ func (p *ICMPProber) Probe(
 
 	if ret == 0 {
 		result.Timeout = true
+		result.Status = StatusTimeout
+
 		return result, nil
 	}
 
@@ -222,21 +225,25 @@ func (p *ICMPProber) Probe(
 	switch reply.Status {
 	case ipSuccess:
 		result.Reached = true
+		result.Status = StatusSuccess
 
 	case ipTTLExpiredTransit:
-		result.Reached = false
+		result.Status = StatusTTLExpired
 
 	case ipReqTimedOut:
 		result.Timeout = true
+		result.Status = StatusTimeout
 
 	case ipDestNetUnreachable,
 		ipDestHostUnreachable,
 		ipDestProtUnreachable,
 		ipDestPortUnreachable:
 		result.Timeout = true
+		result.Status = StatusUnreachable
 
 	default:
 		result.Timeout = true
+		result.Status = StatusUnknown
 	}
 
 	return result, nil

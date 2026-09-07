@@ -6,6 +6,16 @@ import (
 	"time"
 )
 
+type Status uint8
+
+const (
+	StatusUnknown Status = iota
+	StatusSuccess
+	StatusTTLExpired
+	StatusTimeout
+	StatusUnreachable
+)
+
 type Result struct {
 	TTL int
 
@@ -13,6 +23,7 @@ type Result struct {
 	RTT     time.Duration
 	Reached bool
 	Timeout bool
+	Status  Status
 }
 
 type Prober interface {
